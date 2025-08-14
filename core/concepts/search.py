@@ -281,9 +281,9 @@ class ConceptFuzzySearch:  # pragma: no cover
         return Q("bool", must=must_clauses)
 
     @classmethod
-    def get_search_results(cls, row, repo_url, offset=0, limit=5):
+    def get_search_results(cls, row, repo_url, offset=0, limit=5, normalize=False):
         from core.concepts.documents import ConceptDocument
         search = cls.search(row, repo_url)
-        es_search = CustomESSearch(search[offset:limit], ConceptDocument)
+        es_search = CustomESSearch(search[offset:limit], ConceptDocument, normalize=normalize)
         es_search.to_queryset()
         return es_search.queryset, es_search.scores, es_search.max_score, es_search.highlights

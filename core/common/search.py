@@ -5,6 +5,7 @@ from django.db.models import Case, When, IntegerField
 from elasticsearch_dsl import FacetedSearch, Q
 from pydash import compact, get
 
+from core.common.es_normalizers import ScoreNormalizer
 from core.common.utils import is_url_encoded_string
 
 
@@ -39,7 +40,7 @@ class CustomESSearch:
     MUST_HAVE_REGEX = fr'\{MUST_HAVE_PREFIX}(\w+)'
     MUST_NOT_HAVE_REGEX = fr'\{MUST_NOT_HAVE_PREFIX}(\w+)'
 
-    def __init__(self, dsl_search, document=None):
+    def __init__(self, dsl_search, document=None, normalize=False):
         self._dsl_search = dsl_search
         self.document = document
         self.queryset = None
@@ -49,6 +50,8 @@ class CustomESSearch:
         self.score_stats = None
         self.score_distribution = None
         self.total = 0
+        self.normalize = normalize
+        self.es_search_results = None
 
     @classmethod
     def get_must_haves(cls, search_str):
@@ -208,27 +211,31 @@ class CustomESSearch:
         It cost a query to the sql db.
         """
         s, hits = self.__get_response()
+        if self.normalize:
+            self.es_search_results = ScoreNormalizer(s).normalize()
+            hits = get(self.es_search_results, 'hits', {})
+            s = self.es_search_results
 
-        for result in hits.hits:
+        for result in get(hits, 'hits', []):
             _id = get(result, '_id')
             self.scores[int(_id)] = get(result, '_score')
             highlight = get(result, 'highlight')
             if highlight:
-                self.highlights[int(_id)] = highlight.to_dict()
+                self.highlights[int(_id)] = highlight
         if self.document and self.document.__name__ == 'RepoDocument':
             from core.sources.models import Source
             from core.collections.models import Collection
             qs = compact([
-                (Source if result.meta.index == 'sources' else Collection).objects.filter(
-                    id=result.meta.id
-                ).first() for result in s
+                (Source if result['_index'] == 'sources' else Collection).objects.filter(
+                    id=result['_id']
+                ).first() for result in get(s, 'hits.hits', [])
             ])
         else:
-            pks = [result.meta.id for result in s]
+            pks = [result['_id'] for result in get(s, 'hits.hits', [])]
             if len(pks) == 1:
-                qs = self._dsl_search._model.objects.filter(pk=pks[0])  # pylint: disable=protected-access
+                qs = self._dsl_search._model.objects.filter(pk=pks[0])
             else:
-                qs = self._dsl_search._model.objects.filter(pk__in=pks)  # pylint: disable=protected-access
+                qs = self._dsl_search._model.objects.filter(pk__in=pks)
             if keep_order:
                 preserved_order = Case(
                     *[When(pk=pk, then=pos) for pos, pk in enumerate(pks)],
@@ -236,7 +243,7 @@ class CustomESSearch:
                 )
                 qs = qs.order_by(preserved_order)
         self.queryset = qs
-        self.total = hits.total.value
+        self.total = get(hits, 'total.value', 0)
 
     def get_aggregations(self, verbose=False, raw=False):
         s, _ = self.__get_response()
@@ -299,11 +306,10 @@ class CustomESSearch:
 
     def __get_response(self):
         # Do not query again if the es result is already cached
-        if not hasattr(self._dsl_search, '_response'):
+        if not self.es_search_results:
             # We only need the meta fields with the models ids
-            s = self._dsl_search.source(excludes=['*'])
-            s = s.execute()
-            hits = s.hits
-            self.max_score = hits.max_score
-            return s, hits
-        return self._dsl_search, None
+            self.es_search_results = self._dsl_search.execute().to_dict()
+        s = self.es_search_results
+        hits = get(s, 'hits', {})
+        self.max_score = get(hits, 'max_score')
+        return s, hits

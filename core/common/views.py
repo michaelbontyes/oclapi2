@@ -33,12 +33,10 @@ from core.common.serializers import RootSerializer
 from core.common.swagger_parameters import all_resource_query_param
 from core.common.throttling import ThrottleUtil
 from core.common.utils import compact_dict_by_values, to_snake_case, parse_updated_since_param, \
-    to_int, get_falsy_values, get_truthy_values, format_url_for_search
+    to_int, get_falsy_values, get_truthy_values, format_url_for_search, TRUTHY
 from core.concepts.permissions import CanViewParentDictionary, CanEditParentDictionary
 from core.orgs.constants import ORG_OBJECT_TYPE
 from core.users.constants import USER_OBJECT_TYPE
-
-TRUTHY = get_truthy_values()
 
 
 class BaseAPIView(generics.GenericAPIView, PathWalkerMixin):
@@ -160,11 +158,13 @@ class BaseAPIView(generics.GenericAPIView, PathWalkerMixin):
 
     def filter_queryset(self, queryset=None):
         if self.is_searchable and self.should_perform_es_search():
+            normalize = self.request.query_params.get('normalize', 'false').lower() in TRUTHY
             if self.is_fuzzy_search:
                 queryset, self._scores, self._max_score, self._highlights = self.get_fuzzy_search_results_qs(
-                    self._source_versions, self._extra_filters)
+                    self._source_versions, self._extra_filters, normalize=normalize)
             else:
-                queryset, self._scores, self._max_score, self._highlights = self.get_search_results_qs()
+                queryset, self._scores, self._max_score, self._highlights = self.get_search_results_qs(
+                    normalize=normalize)
             return queryset
 
         if queryset is None:
@@ -829,7 +829,7 @@ class BaseAPIView(generics.GenericAPIView, PathWalkerMixin):
     def get_fuzzy_search_fields(self):
         return self.document_model.get_fuzzy_search_attrs() or {}
 
-    def __get_queryset_from_search_results(self, search_results):
+    def __get_queryset_from_search_results(self, search_results, normalize=False):
         offset = max(to_int(self.request.GET.get('offset'), 0), 0)
         self.limit = int(self.limit) or LIST_DEFAULT_LIMIT
         page = max(to_int(self.request.GET.get('page'), 1), 1)
@@ -837,7 +837,7 @@ class BaseAPIView(generics.GenericAPIView, PathWalkerMixin):
         end = start + self.limit
         try:
             search_results = search_results.params(request_timeout=ES_REQUEST_TIMEOUT)
-            es_search = CustomESSearch(search_results[start:end], self.document_model)
+            es_search = CustomESSearch(search_results[start:end], self.document_model, normalize=normalize)
             es_search.to_queryset()
             self.total_count = es_search.total - offset
             return es_search.queryset, es_search.scores, es_search.max_score, es_search.highlights
@@ -855,13 +855,15 @@ class BaseAPIView(generics.GenericAPIView, PathWalkerMixin):
         except TransportError as ex:  # pragma: no cover
             raise Http400(detail=get(ex, 'info') or get(ex, 'error') or str(ex)) from ex
 
-    def get_search_results_qs(self):
-        return self.__get_queryset_from_search_results(self.__get_search_results())
+    def get_search_results_qs(self, normalize=False):
+        return self.__get_queryset_from_search_results(self.__get_search_results(), normalize=normalize)
 
     def get_fuzzy_search_results_qs(
-            self, source_versions=None, other_filters=None
+            self, source_versions=None, other_filters=None, normalize=False
     ):
-        return self.__get_queryset_from_search_results(self.__get_fuzzy_search_results(source_versions, other_filters))
+        return self.__get_queryset_from_search_results(
+            self.__get_fuzzy_search_results(source_versions, other_filters), normalize=normalize
+        )
 
     def get_search_stats(
             self, source_versions=None, other_filters=None

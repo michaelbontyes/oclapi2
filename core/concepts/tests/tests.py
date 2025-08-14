@@ -1969,3 +1969,30 @@ class ValidatorSpecifierTest(OCLTestCase):
         self.assertEqual(
             sorted(expected_reference_values['DescriptionTypes']), sorted(actual_reference_values['DescriptionTypes'])
         )
+
+
+class ConceptSearchTest(OCLTestCase):
+    def setUp(self):
+        super().setUp()
+        self.source = OrganizationSourceFactory()
+        self.concept1 = ConceptFactory(parent=self.source, names=[ConceptNameFactory(name='Test Concept 1')])
+        self.concept2 = ConceptFactory(parent=self.source, names=[ConceptNameFactory(name='Test Concept 2')])
+        self.concept3 = ConceptFactory(parent=self.source, names=[ConceptNameFactory(name='Another Concept')])
+
+    def test_search_without_normalization(self):
+        from core.concepts.search import ConceptFuzzySearch
+        queryset, scores, max_score, highlights = ConceptFuzzySearch.get_search_results(
+            {'name': 'Test'}, self.source.uri
+        )
+        self.assertEqual(queryset.count(), 2)
+        self.assertTrue(max_score > 1)
+
+    def test_search_with_normalization(self):
+        from core.concepts.search import ConceptFuzzySearch
+        queryset, scores, max_score, highlights = ConceptFuzzySearch.get_search_results(
+            {'name': 'Test'}, self.source.uri, normalize=True
+        )
+        self.assertEqual(queryset.count(), 2)
+        self.assertEqual(max_score, 1)
+        for score in scores.values():
+            self.assertTrue(0 <= score <= 1)
