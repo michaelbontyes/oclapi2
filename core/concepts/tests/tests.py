@@ -1996,3 +1996,20 @@ class ConceptSearchTest(OCLTestCase):
         self.assertEqual(max_score, 1)
         for score in scores.values():
             self.assertTrue(0 <= score <= 1)
+
+    def test_match_api_with_normalization(self):
+        from rest_framework.test import APIClient
+        client = APIClient()
+        response = client.post(
+            '/concepts/?normalize=true',
+            {
+                'rows': [{'name': 'Test'}],
+                'target_repo_url': self.source.uri
+            },
+            format='json'
+        )
+        self.assertEqual(response.status_code, 200)
+        results = response.data[0]['results']
+        self.assertEqual(len(results), 2)
+        for result in results:
+            self.assertTrue(0 <= result['search_meta']['search_score'] <= 1)

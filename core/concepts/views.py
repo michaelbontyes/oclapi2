@@ -815,6 +815,7 @@ class MetadataToConceptsListView(BaseAPIView):  # pragma: no cover
         is_semantic = self.request.query_params.get('semantic', None) in get_truthy_values() and Toggle.get(
             'SEMANTIC_SEARCH_TOGGLE')
         best_match = self.request.query_params.get('bestMatch', None) in get_truthy_values()
+        normalize = self.request.query_params.get('normalize', 'false').lower() in TRUTHY
         score_threshold = self.score_threshold_semantic_very_high if is_semantic else self.score_threshold
         repo_params = self.get_repo_params(is_semantic, target_repo_params, target_repo_url)
         faceted_criterion = self.get_faceted_criterion(False, filters, minimum_should_match=1) if filters else None
@@ -826,7 +827,7 @@ class MetadataToConceptsListView(BaseAPIView):  # pragma: no cover
                 is_semantic, num_candidates, k_nearest, map_config, faceted_criterion
             )
             search = search.params(min_score=score_threshold if best_match else 0)
-            es_search = CustomESSearch(search[start:end], ConceptDocument)
+            es_search = CustomESSearch(search[start:end], ConceptDocument, normalize=normalize)
             es_search.to_queryset(False)
             result = {'row': row, 'results': [], 'map_config': map_config, 'filter': filters}
             for concept in es_search.queryset:
